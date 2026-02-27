@@ -1,0 +1,236 @@
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Pet } from './components/Pet'
+import { ChatBubble, ChatMessage } from './components/ChatBubble'
+import { Pomodoro } from './components/Pomodoro'
+import { TodoList, Todo } from './components/TodoList'
+import { Settings } from './components/Settings'
+import { ResizablePanel } from './components/ResizablePanel'
+import { useGemini } from './hooks/useGemini'
+import { usePomodoro } from './hooks/usePomodoro'
+import { useWeather } from './hooks/useWeather'
+import './styles/global.css'
+
+const STORAGE_KEY = 'mungyi-todos'
+type Tab = 'chat' | 'pomo' | 'todo' | 'settings'
+
+export default function App() {
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState<Tab>('chat')
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    { role: 'pet', text: '안녕하세요 주인님~ 저 뭉이예요! 알람, 할일 추가도 말만 해요 🐾' }
+  ])
+  const [todos, setTodos] = useState<Todo[]>(() => {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]') } catch { return [] }
+  })
+  const [cpuUsage, setCpuUsage] = useState(0)
+  const [ramInfo, setRamInfo] = useState<SystemStats['ram'] | null>(null)
+  const [alarmMsg, setAlarmMsg] = useState<string | null>(null)
+  const [petSpeed, setPetSpeed] = useState(1)
+  const [petName, setPetName] = useState('뭉이')
+  const [voiceEnabled, setVoiceEnabled] = useState(false)
+  const [weatherGreeting, setWeatherGreeting] = useState<string | null>(null)
+
+  const { chat, isLoading, emotion, setEmotion } = useGemini()
+  const weather = useWeather()
+
+  const handlePomoFinish = useCallback((msg: string) => {
+    setMessages(prev => [...prev, { role: 'pet', text: msg }])
+    setAlarmMsg(msg)
+    setEmotion('excited')
+    setTimeout(() => { setAlarmMsg(null); setEmotion('idle') }, 6000)
+  }, [setEmotion])
+
+  const { state: pomoState, controls: pomoControls } = usePomodoro(handlePomoFinish)
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(todos))
+  }, [todos])
+
+  // 시스템 통계
+  useEffect(() => {
+    window.electronAPI.onSystemStats((stats) => {
+      setCpuUsage(stats.cpu)
+      setRamInfo(stats.ram)
+    })
+    return () => window.electronAPI.offSystemStats()
+  }, [])
+
+  // 휴식 알림
+  useEffect(() => {
+    window.electronAPI.onBreakReminder((minutes) => {
+      const msg = `${minutes}분 동안 일했어요! 주인님, 잠깐 쉬어요 💆`
+      setMessages(prev => [...prev, { role: 'pet', text: msg }])
+      setAlarmMsg(msg)
+      setEmotion('love')
+      setTimeout(() => { setAlarmMsg(null); setEmotion('idle') }, 7000)
+    })
+    return () => window.electronAPI.offBreakReminder()
+  }, [setEmotion])
+
+  // 설정 로드
+  useEffect(() => {
+    window.electronAPI.getSettings().then(s => {
+      setPetSpeed(s.petSpeed ?? 1)
+      setPetName(s.petName ?? '')
+      setVoiceEnabled(s.voiceEnabled ?? false)
+      setMessages(prev => {
+        if (prev.length && prev[0].role === 'pet')
+          return [{ ...prev[0], text: `안녕하세요 주인님~ 저 ${s.petName?.trim() || '뭉이'}예요! 알람, 할일 추가도 말만 해요 🐾` }, ...prev.slice(1)]
+        return prev
+      })
+    })
+  }, [])
+  useEffect(() => {
+    const unsub = (s: AppSettings) => { setPetName(s.petName ?? ''); setVoiceEnabled(s.voiceEnabled ?? false) }
+    window.electronAPI.onSettingsUpdated(unsub)
+    return () => window.electronAPI.offSettingsUpdated()
+  }, [])
+
+  // 날씨 반응 - 날씨 로드되면 idle 말풍선에 6초만 표시 (한 번만)
+  const weatherShownRef = useRef(false)
+  useEffect(() => {
+    if (!weather || weatherShownRef.current) return
+    weatherShownRef.current = true
+    const msg = `오늘 날씨는 ${weather.emoji} ${weather.desc}이에요! 기온은 ${weather.temp}°C 주인님~`
+    setWeatherGreeting(msg)
+    setTimeout(() => setWeatherGreeting(null), 6000)
+  }, [weather])
+
+  const handleTogglePanel = useCallback(() => {
+    setPanelOpen(prev => {
+      const next = !prev
+      window.electronAPI.setIgnoreMouseEvents(!next)
+      return next
+    })
+    setEmotion('happy')
+    setTimeout(() => setEmotion('idle'), 1200)
+  }, [setEmotion])
+
+  const speak = useCallback((text: string) => {
+    if (!voiceEnabled || !text.trim()) return
+    if (typeof speechSynthesis === 'undefined') return
+    speechSynthesis.cancel()
+    const u = new SpeechSynthesisUtterance(text)
+    u.lang = 'ko-KR'
+    u.rate = 0.95
+    speechSynthesis.speak(u)
+  }, [voiceEnabled])
+
+  const handleSend = useCallback(async (text: string) => {
+    setMessages(prev => [...prev, { role: 'user', text }])
+    const t = text.trim()
+
+    // 가위바위보
+    if (/^가위$|^바위$|^보$/i.test(t)) {
+      const choices = ['가위', '바위', '보'] as const
+      const mine = choices[Math.floor(Math.random() * 3)]
+      const userIdx = choices.indexOf(t as typeof choices[number])
+      const myIdx = choices.indexOf(mine)
+      let result: string
+      if (userIdx === myIdx) result = `비겼어요! 저도 ${mine} 냈어요~`
+      else if ((userIdx + 1) % 3 === myIdx) result = `제가 이겼어요! ${mine} 냈어요 ㅎㅎ`
+      else result = `주인님이 이기셨어요! 저는 ${mine} 냈어요 ㅠㅠ`
+      setMessages(prev => [...prev, { role: 'pet', text: result }])
+      speak(result)
+      return
+    }
+
+    // 날씨 질문은 앱에서 직접 응답
+    if (/날씨|weather|기온|(오늘|지금)\s*(날씨|날씨가)|날씨\s*(알려|어때|어떠냐|어때요|어떄)/i.test(t)) {
+      const wx = weather ?? await window.electronAPI.getWeather()
+      if (wx) {
+        const msg = `오늘 날씨는 ${wx.emoji} ${wx.desc}이에요! 기온은 ${wx.temp}°C 주인님~`
+        setMessages(prev => [...prev, { role: 'pet', text: msg }])
+        speak(msg)
+        return
+      }
+      setMessages(prev => [...prev, { role: 'pet', text: '날씨를 불러오지 못했어요 ㅠㅠ 네트워크를 확인해주세요~ 🌤️' }])
+      return
+    }
+
+    const result = await chat(text)
+    setMessages(prev => [...prev, { role: 'pet', text: result.text }])
+    speak(result.text)
+
+    if (result.actions?.length) {
+      result.actions.forEach((action) => {
+        if (action.type === 'timer' && action.seconds) {
+          const label = action.label || `${action.seconds}초 알람`
+          const timeStr = action.seconds >= 60 ? `${Math.floor(action.seconds/60)}분` : `${action.seconds}초`
+          setMessages(prev => [...prev, { role: 'pet', text: `⏰ ${timeStr} 뒤에 알려드릴게요!` }])
+          setTimeout(() => {
+            window.electronAPI.showNotification('⏰ 뭉이 알람!', label)
+            setAlarmMsg(`⏰ ${label} 시간이 됐어요!`)
+            setMessages(prev => [...prev, { role: 'pet', text: `⏰ ${label} 시간이에요 주인님!` }])
+            setEmotion('excited')
+            setTimeout(() => { setAlarmMsg(null); setEmotion('idle') }, 5000)
+          }, action.seconds * 1000)
+        }
+        if (action.type === 'add_todo' && action.text) {
+          setTodos(prev => [...prev, { id: Date.now(), text: action.text!, done: false, urgent: action.urgent || false }])
+          setMessages(prev => [...prev, { role: 'pet', text: `📋 할일 탭에 추가했어요!` }])
+        }
+      })
+    }
+  }, [chat, setEmotion, weather, voiceEnabled, speak])
+
+  const handlePanelClose = useCallback(() => {
+    setPanelOpen(false)
+    window.electronAPI.setIgnoreMouseEvents(true)
+  }, [])
+
+  return (
+    <div className="app-root">
+      {alarmMsg && (
+        <div className="alarm-overlay" onClick={() => setAlarmMsg(null)}>
+          <div className="alarm-box">
+            <div className="alarm-text">{alarmMsg}</div>
+            <div className="alarm-dismiss">클릭해서 닫기</div>
+          </div>
+        </div>
+      )}
+
+      {panelOpen && (
+        <div className="panel-container">
+          <ResizablePanel>
+            <div className="panel-tabs">
+              <button className={`tab-btn ${activeTab==='chat'?'active':''}`} onClick={()=>setActiveTab('chat')}>💬</button>
+              <button className={`tab-btn ${activeTab==='pomo'?'active':''}`} onClick={()=>setActiveTab('pomo')}>🍅</button>
+              <button className={`tab-btn ${activeTab==='todo'?'active':''}`} onClick={()=>setActiveTab('todo')}>
+                📋{todos.filter(t=>!t.done).length>0&&<span className="todo-badge">{todos.filter(t=>!t.done).length}</span>}
+              </button>
+              <button className={`tab-btn ${activeTab==='settings'?'active':''}`} onClick={()=>setActiveTab('settings')}>⚙️</button>
+              <button className="close-btn" onClick={handlePanelClose}>×</button>
+            </div>
+
+            {/* 날씨 + RAM 상태바 */}
+            {(weather || ramInfo) && (
+              <div className="status-bar">
+                {weather && <span>{weather.emoji} {weather.temp}°C</span>}
+                {ramInfo && <span>💾 RAM {ramInfo.used}%</span>}
+                {cpuUsage > 60 && <span>⚡ CPU {cpuUsage}%</span>}
+              </div>
+            )}
+
+            <div className="panel-content">
+              {activeTab==='chat' && <ChatBubble messages={messages} onSend={handleSend} isLoading={isLoading} petName={petName} />}
+              {activeTab==='pomo' && <Pomodoro state={pomoState} controls={pomoControls} />}
+              {activeTab==='todo' && <TodoList todos={todos} setTodos={setTodos} />}
+              {activeTab==='settings' && <Settings />}
+            </div>
+          </ResizablePanel>
+        </div>
+      )}
+
+      <Pet
+        emotion={emotion}
+        isLoading={isLoading}
+        cpuUsage={cpuUsage}
+        isPanelOpen={panelOpen}
+        onTogglePanel={handleTogglePanel}
+        speedMultiplier={petSpeed}
+        weatherGreeting={weatherGreeting}
+      />
+    </div>
+  )
+}

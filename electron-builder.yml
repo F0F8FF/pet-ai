@@ -1,0 +1,45 @@
+# https://www.electron.build/configuration/configuration
+appId: com.aidesktoppet.app
+productName: Pet AI
+directories:
+  output: release
+  buildResources: build  # 아이콘, 추가 리소스는 build/ 아래에 둠
+
+files:
+  - out/**/*
+  - package.json
+  - "!**/.env"
+  - "!**/.env.*"
+  - "!src/**"
+  - "!**/.vscode/*"
+  - "!{.gitignore,README.md,CHANGELOG.md,electron.vite.config.ts,tsconfig*.json}"
+
+mac:
+  category: public.app-category.utilities
+  target:
+    - dmg
+    - zip
+  icon: build/icon.png
+  extendInfo:
+    NSMicrophoneUsageDescription: 채팅 음성 입력에 사용해요 (선택)
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+dmg:
+  artifactName: ${productName}-${version}.${ext}
+
+win:
+  target:
+    - nsis
+    - portable
+  # icon: build/icon.ico  # 256x256 PNG → ico 변환 후 사용
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-setup.${ext}
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+
+npmRebuild: false

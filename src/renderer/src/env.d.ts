@@ -74,6 +74,7 @@ interface WindowElectron {
     offCpuUpdate: () => void
     onBreakReminder: (cb: (minutes: number) => void) => void
     offBreakReminder: () => void
+    runPython: (payload: { task: string; input: unknown }) => Promise<{ result?: unknown; error?: string }>
     getSettings: () => Promise<AppSettings>
     saveSettings: (s: AppSettings) => Promise<AppSettings>
     onSettingsUpdated: (cb: (s: AppSettings) => void) => void

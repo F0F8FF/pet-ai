@@ -135,6 +135,66 @@ export default function App() {
       return
     }
 
+    // Python NLP 분석 명령어
+    if (/^(기분|감정)\s*(분석|리포트|보고서)?$/i.test(t)) {
+      const userMsgs = messages.filter(m => m.role === 'user').map(m => m.text)
+      if (userMsgs.length < 2) {
+        const msg = '대화를 좀 더 나눠야 분석할 수 있어요! 🐾'
+        setMessages(prev => [...prev, { role: 'pet', text: msg }])
+        speak(msg)
+        return
+      }
+      try {
+        const res = await window.electronAPI.runPython({ task: 'mood', input: { messages: userMsgs } })
+        if (res.error) throw new Error(res.error)
+        const r = res.result as { emoji: string; avg_score: number; message_count: number; trend_text: string }
+        const msg = `${r.emoji} 주인님 기분 분석 결과!\n📊 평균 점수: ${r.avg_score} (메시지 ${r.message_count}개)\n${r.trend_text}`
+        setMessages(prev => [...prev, { role: 'pet', text: msg }])
+        speak(msg.replace(/\n/g, '. '))
+      } catch {
+        setMessages(prev => [...prev, { role: 'pet', text: 'Python 분석 엔진에 연결할 수 없어요 🥺 python3과 kiwipiepy가 설치돼 있는지 확인해주세요!' }])
+      }
+      return
+    }
+
+    if (/^키워드\s*(분석|추출)?$/i.test(t)) {
+      const allText = messages.filter(m => m.role === 'user').map(m => m.text).join(' ')
+      if (allText.trim().length < 10) {
+        const msg = '키워드를 뽑으려면 대화가 더 필요해요! 🐾'
+        setMessages(prev => [...prev, { role: 'pet', text: msg }])
+        speak(msg)
+        return
+      }
+      try {
+        const res = await window.electronAPI.runPython({ task: 'keywords', input: { text: allText, top_n: 5 } })
+        if (res.error) throw new Error(res.error)
+        const keywords = res.result as Array<{ word: string; count: number; score: number }>
+        const list = keywords.map((k, i) => `${i + 1}. ${k.word} (${k.count}회)`).join('\n')
+        const msg = `🔑 주인님 대화 키워드 TOP ${keywords.length}!\n${list}`
+        setMessages(prev => [...prev, { role: 'pet', text: msg }])
+        speak(`주인님이 가장 많이 말한 키워드는 ${keywords[0]?.word}이에요!`)
+      } catch {
+        setMessages(prev => [...prev, { role: 'pet', text: 'Python 분석 엔진에 연결할 수 없어요 🥺' }])
+      }
+      return
+    }
+
+    if (/^감정\s*(분석)?\s+.+/i.test(t)) {
+      const targetText = t.replace(/^감정\s*(분석)?\s+/, '')
+      try {
+        const res = await window.electronAPI.runPython({ task: 'sentiment', input: { text: targetText } })
+        if (res.error) throw new Error(res.error)
+        const r = res.result as { emoji: string; label: string; score: number; positive: number; negative: number }
+        const labels: Record<string, string> = { positive: '긍정', negative: '부정', neutral: '중립' }
+        const msg = `${r.emoji} 감정 분석 결과: ${labels[r.label] || r.label} (점수: ${r.score})\n긍정 ${r.positive}개 / 부정 ${r.negative}개`
+        setMessages(prev => [...prev, { role: 'pet', text: msg }])
+        speak(msg.replace(/\n/g, '. '))
+      } catch {
+        setMessages(prev => [...prev, { role: 'pet', text: 'Python 분석 엔진에 연결할 수 없어요 🥺' }])
+      }
+      return
+    }
+
     // 날씨 질문은 앱에서 직접 응답
     if (/날씨|weather|기온|(오늘|지금)\s*(날씨|날씨가)|날씨\s*(알려|어때|어떠냐|어때요|어떄)/i.test(t)) {
       const wx = weather ?? await window.electronAPI.getWeather()

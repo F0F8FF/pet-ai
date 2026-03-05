@@ -7,12 +7,22 @@ directories:
 
 files:
   - out/**/*
+  - python/**/*
   - package.json
   - "!**/.env"
   - "!**/.env.*"
   - "!src/**"
   - "!**/.vscode/*"
+  - "!**/__pycache__/**"
   - "!{.gitignore,README.md,CHANGELOG.md,electron.vite.config.ts,tsconfig*.json}"
+
+extraResources:
+  - from: python/
+    to: python/
+    filter:
+      - "**/*"
+      - "!__pycache__/**"
+      - "!*.pyc"
 
 mac:
   category: public.app-category.utilities

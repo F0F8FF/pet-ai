@@ -3,6 +3,7 @@ import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
 import { config } from 'dotenv'
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { spawn, ChildProcess } from 'child_process'
 import os from 'os'
 
 config()
@@ -320,6 +321,88 @@ async function chatWithOllama(sessionId: string, userMessage: string, petName: s
   return parseModelResponse(raw)
 }
 
+// ── Python NLP 엔진 ─────────────────────────────────────────
+
+let pyProc: ChildProcess | null = null
+let pyReady = false
+const pyCallbacks = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
+let pyReqId = 0
+
+function getPythonPath(): string {
+  const pythonDir = app.isPackaged
+    ? join(process.resourcesPath, 'python')
+    : join(app.getAppPath(), 'python')
+  return join(pythonDir, 'main.py')
+}
+
+function spawnPython(): void {
+  if (pyProc) return
+  const scriptPath = getPythonPath()
+  if (!existsSync(scriptPath)) {
+    console.warn('[Python] main.py not found:', scriptPath)
+    return
+  }
+
+  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3'
+  pyProc = spawn(pythonCmd, [scriptPath], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+  })
+
+  pyProc.stdout?.on('data', (chunk: Buffer) => {
+    const lines = chunk.toString('utf-8').split('\n').filter(Boolean)
+    for (const line of lines) {
+      try {
+        const resp = JSON.parse(line)
+        const id = resp._id as number | undefined
+        if (id != null && pyCallbacks.has(id)) {
+          const cb = pyCallbacks.get(id)!
+          pyCallbacks.delete(id)
+          if (resp.error) cb.reject(new Error(resp.error))
+          else cb.resolve(resp.result)
+        }
+      } catch {}
+    }
+  })
+
+  pyProc.stderr?.on('data', (chunk: Buffer) => {
+    console.warn('[Python stderr]', chunk.toString('utf-8').trim())
+  })
+
+  pyProc.on('exit', (code) => {
+    console.log('[Python] exited with code', code)
+    pyProc = null
+    pyReady = false
+    for (const [, cb] of pyCallbacks) cb.reject(new Error('Python process exited'))
+    pyCallbacks.clear()
+  })
+
+  pyReady = true
+}
+
+function callPython(task: string, input: unknown): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    if (!pyProc?.stdin?.writable) {
+      spawnPython()
+      if (!pyProc?.stdin?.writable) {
+        return reject(new Error('Python 엔진을 시작할 수 없어요. python3이 설치되어 있는지 확인해주세요.'))
+      }
+    }
+    const id = ++pyReqId
+    pyCallbacks.set(id, { resolve, reject })
+
+    const payload = JSON.stringify({ task, input, _id: id }) + '\n'
+    pyProc!.stdin!.write(payload)
+
+    setTimeout(() => {
+      if (pyCallbacks.has(id)) {
+        pyCallbacks.delete(id)
+        reject(new Error('Python 응답 시간 초과 (10초)'))
+      }
+    }, 10000)
+  })
+}
+
 // ── IPC 핸들러 ──────────────────────────────────────────────
 app.whenReady().then(() => {
   // LLM 채팅 (Gemini / Ollama 분기)
@@ -343,6 +426,16 @@ app.whenReady().then(() => {
         return { error: 'Ollama 서버에 연결할 수 없어요. ollama serve가 실행 중인지 확인해주세요 🥺' }
       }
       return { error: '앗, 통신 오류가 났어요 주인님~ 😢' }
+    }
+  })
+
+  // Python NLP 엔진
+  ipcMain.handle('run-python', async (_event, payload: { task: string; input: unknown }) => {
+    try {
+      const result = await callPython(payload.task, payload.input)
+      return { result }
+    } catch (err: unknown) {
+      return { error: (err as Error).message || 'Python 오류' }
     }
   })
 
@@ -414,5 +507,9 @@ app.on('window-all-closed', () => {
   if (!loadSettings().runInBackground || process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  if (pyProc) { pyProc.kill(); pyProc = null }
 })
 

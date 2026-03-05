@@ -50,6 +50,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('break-reminder', (_e, minutes) => cb(minutes)),
   offBreakReminder: () => ipcRenderer.removeAllListeners('break-reminder'),
 
+  // Python NLP 엔진
+  runPython: (payload: { task: string; input: unknown }): Promise<{ result?: unknown; error?: string }> =>
+    ipcRenderer.invoke('run-python', payload),
+
   // 설정
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke('get-settings'),
   saveSettings: (s: AppSettings): Promise<AppSettings> => ipcRenderer.invoke('save-settings', s),

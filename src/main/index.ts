@@ -133,6 +133,7 @@ function getSystemPrompt(petName: string): string {
 }
 
 const chatHistories = new Map<string, Array<{ role: string; parts: Array<{ text: string }> }>>()
+const ollamaChatHistories = new Map<string, Array<{ role: string; content: string }>>()
 
 // ── 전역 변수 ──────────────────────────────────────────────
 let mainWindow: BrowserWindow | null = null
@@ -269,36 +270,77 @@ function createWindow(): void {
   }
 }
 
+// ── LLM 호출 함수 ───────────────────────────────────────────
+
+function parseModelResponse(raw: string): { text: string; actions: unknown[] } {
+  let text = raw, actions: unknown[] = []
+  try {
+    const parsed = JSON.parse(raw.replace(/^```json\n?/, '').replace(/\n?```$/, ''))
+    text = parsed.text || raw
+    actions = Array.isArray(parsed.actions) ? parsed.actions : []
+  } catch {}
+  return { text, actions }
+}
+
+async function chatWithGemini(sessionId: string, userMessage: string, petName: string) {
+  const apiKey = process.env['VITE_GEMINI_API_KEY']
+  const modelId = process.env['VITE_GEMINI_MODEL']
+  if (!apiKey || !modelId) {
+    return { error: '.env에서 VITE_GEMINI_API_KEY / VITE_GEMINI_MODEL을 확인해주세요 🥺' }
+  }
+  const genAI = new GoogleGenerativeAI(apiKey)
+  const model = genAI.getGenerativeModel({ model: modelId, systemInstruction: getSystemPrompt(petName) })
+  const history = chatHistories.get(sessionId) || []
+  const chatSession = model.startChat({ history })
+  const result = await chatSession.sendMessage(userMessage)
+  const raw = result.response.text().trim()
+  chatHistories.set(sessionId, [...history, { role: 'user', parts: [{ text: userMessage }] }, { role: 'model', parts: [{ text: raw }] }])
+  return parseModelResponse(raw)
+}
+
+async function chatWithOllama(sessionId: string, userMessage: string, petName: string) {
+  const ollamaModel = process.env['VITE_OLLAMA_MODEL'] || 'qwen3.5'
+  const ollamaUrl = process.env['VITE_OLLAMA_URL'] || 'http://localhost:11434'
+  const history = ollamaChatHistories.get(sessionId) || []
+  const messages = [
+    { role: 'system', content: getSystemPrompt(petName) },
+    ...history,
+    { role: 'user', content: userMessage }
+  ]
+  const res = await fetch(`${ollamaUrl}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: ollamaModel, messages, stream: false })
+  })
+  if (!res.ok) throw new Error(`Ollama ${res.status}: ${res.statusText}`)
+  const data = await res.json() as { message?: { content?: string } }
+  const raw = (data.message?.content ?? '').trim()
+  if (!raw) return { error: 'Ollama 응답이 비어있어요.' }
+  ollamaChatHistories.set(sessionId, [...history, { role: 'user', content: userMessage }, { role: 'assistant', content: raw }])
+  return parseModelResponse(raw)
+}
+
 // ── IPC 핸들러 ──────────────────────────────────────────────
 app.whenReady().then(() => {
-  // Gemini 채팅
+  // LLM 채팅 (Gemini / Ollama 분기)
   ipcMain.handle('gemini-chat', async (_event, sessionId: string, userMessage: string) => {
-    const apiKey = process.env['VITE_GEMINI_API_KEY']
-    const modelId = process.env['VITE_GEMINI_MODEL']
-    if (!apiKey || !modelId) {
-      return { error: 'API 키나 모델이 설정되지 않았어요! .env에서 VITE_GEMINI_API_KEY / VITE_GEMINI_MODEL을 확인해주세요 🥺' }
-    }
     settings = loadSettings()
+    const provider = (process.env['VITE_LLM_PROVIDER'] || 'gemini').toLowerCase()
+    const petName = settings.petName || '뭉이'
     try {
-      const genAI = new GoogleGenerativeAI(apiKey)
-      const model = genAI.getGenerativeModel({ model: modelId, systemInstruction: getSystemPrompt(settings.petName || '뭉이') })
-      const history = chatHistories.get(sessionId) || []
-      const chatSession = model.startChat({ history })
-      const result = await chatSession.sendMessage(userMessage)
-      const raw = result.response.text().trim()
-      let text = raw, actions: unknown[] = []
-      try {
-        const parsed = JSON.parse(raw.replace(/^```json\n?/, '').replace(/\n?```$/, ''))
-        text = parsed.text || raw; actions = Array.isArray(parsed.actions) ? parsed.actions : []
-      } catch {}
-      chatHistories.set(sessionId, [...history, { role: 'user', parts: [{ text: userMessage }] }, { role: 'model', parts: [{ text: raw }] }])
-      return { text, actions }
+      if (provider === 'ollama') {
+        return await chatWithOllama(sessionId, userMessage, petName)
+      }
+      return await chatWithGemini(sessionId, userMessage, petName)
     } catch (err: unknown) {
-      console.error('Gemini error:', err)
+      console.error('LLM error:', err)
       const status = (err as { status?: number })?.status
       const msg = (err as { message?: string })?.message ?? ''
       if (status === 429 || /quota|Too Many Requests|한도|limit/i.test(msg)) {
         return { error: '오늘 요청 한도를 다 썼어요 😢 잠시 뒤에 다시 시도하거나, Google AI Studio에서 사용량을 확인해주세요.' }
+      }
+      if (/ECONNREFUSED|fetch failed/i.test(msg)) {
+        return { error: 'Ollama 서버에 연결할 수 없어요. ollama serve가 실행 중인지 확인해주세요 🥺' }
       }
       return { error: '앗, 통신 오류가 났어요 주인님~ 😢' }
     }

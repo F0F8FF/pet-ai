@@ -512,6 +512,80 @@ body {
   border-color: #ff6b9d;
 }
 
+.pomo-config-btn {
+  flex: 0 0 32px !important;
+}
+
+/* 시간 설정 패널 */
+.pomo-config {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: #fafafa;
+  border-radius: 10px;
+  border: 1px solid #f0f0f0;
+  flex-shrink: 0;
+  animation: pop-in 0.15s ease;
+}
+
+.pomo-config-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #555;
+}
+
+.pomo-config-row label {
+  width: 52px;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.pomo-config-row input {
+  width: 52px;
+  padding: 4px 6px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  font-size: 13px;
+  text-align: center;
+  outline: none;
+  background: white;
+}
+
+.pomo-config-row input:focus {
+  border-color: #ff6b9d;
+}
+
+.pomo-config-presets {
+  display: flex;
+  gap: 4px;
+}
+
+.pomo-preset-btn {
+  flex: 1;
+  padding: 3px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  font-size: 11px;
+  background: white;
+  color: #888;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.pomo-preset-btn:hover {
+  background: #fff0f5;
+  border-color: #ff6b9d;
+  color: #ff6b9d;
+}
+
+.pomo-config-save {
+  padding: 5px;
+  font-size: 12px;
+}
+
 /* 링 영역 */
 .pomo-ring-wrap {
   position: relative;

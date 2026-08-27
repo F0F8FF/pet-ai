@@ -23,6 +23,11 @@ extraResources:
       - "**/*"
       - "!__pycache__/**"
       - "!*.pyc"
+  # 트레이 아이콘은 asar 밖 Resources/ 에 둬야 메인 프로세스가 읽을 수 있다
+  - from: build/tray.png
+    to: tray.png
+  - from: build/tray@2x.png
+    to: tray@2x.png
 
 mac:
   category: public.app-category.utilities

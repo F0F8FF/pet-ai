@@ -1,6 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, screen, Notification, Tray, Menu, nativeImage } from 'electron'
-import { join } from 'path'
-import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
+import { join, dirname } from 'path'
+import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync } from 'fs'
 import { config } from 'dotenv'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { spawn, ChildProcess } from 'child_process'
@@ -8,7 +8,7 @@ import os from 'os'
 
 config()
 
-// ── 단일 인스턴스 (lock 파일 + Electron lock 이중 적용) ────────
+// ── 단일 인스턴스 (Electron lock이 보장, 락 파일은 참고용) ────────
 const LOCK_PATH = join(app.getPath('userData'), '.single-instance.lock')
 
 function isPidRunning(pid: number): boolean {
@@ -20,19 +20,24 @@ function isPidRunning(pid: number): boolean {
   }
 }
 
-function tryAcquireLock(): boolean {
-  if (existsSync(LOCK_PATH)) {
-    try {
-      const pid = parseInt(readFileSync(LOCK_PATH, 'utf-8').trim(), 10)
-      if (!isNaN(pid) && isPidRunning(pid)) return false
-    } catch {}
-    try { unlinkSync(LOCK_PATH) } catch {}
-  }
+/**
+ * 실행 중인 PID를 락 파일에 기록한다. 단일 인스턴스 보장은 Electron의
+ * requestSingleInstanceLock()이 담당하므로 이 파일은 참고용이며, 기록에 실패해도
+ * 실행을 막지 않는다. (userData 폴더는 ready 이전에는 존재하지 않을 수 있고,
+ * 강제 종료로 남은 PID가 재사용되면 앱이 영구히 실행 불가가 되기 때문)
+ */
+function writeLockFile(): void {
   try {
+    mkdirSync(dirname(LOCK_PATH), { recursive: true })
+    if (existsSync(LOCK_PATH)) {
+      const pid = parseInt(readFileSync(LOCK_PATH, 'utf-8').trim(), 10)
+      if (!isNaN(pid) && pid !== process.pid && isPidRunning(pid)) {
+        console.warn('[단일 인스턴스] 다른 PID의 락이 남아 있습니다:', pid)
+      }
+    }
     writeFileSync(LOCK_PATH, String(process.pid))
-    return true
-  } catch {
-    return false
+  } catch (e) {
+    console.warn('[단일 인스턴스] 락 파일 기록 실패(무시하고 계속):', e)
   }
 }
 
@@ -44,11 +49,11 @@ function releaseLock() {
   } catch {}
 }
 
-const gotLock = app.requestSingleInstanceLock() && tryAcquireLock()
-if (!gotLock) {
+if (!app.requestSingleInstanceLock()) {
   app.quit()
   process.exit(0)
 }
+writeLockFile()
 
 app.on('second-instance', () => {
   if (mainWindow) {
@@ -181,6 +186,32 @@ function startSystemMonitor() {
   poll()
 }
 
+// ── 예약 알람 ──────────────────────────────────────────────
+// 렌더러의 setTimeout은 창이 숨겨지면 Chromium이 최대 1분에 1회로 스로틀링한다.
+// 시간에 민감한 알람은 스로틀링이 없는 메인 프로세스 타이머로 처리한다.
+
+const alarmTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function cancelAlarm(id: string) {
+  const timer = alarmTimers.get(id)
+  if (timer) { clearTimeout(timer); alarmTimers.delete(id) }
+}
+
+function clearAllAlarms() {
+  for (const timer of alarmTimers.values()) clearTimeout(timer)
+  alarmTimers.clear()
+}
+
+function scheduleAlarm(id: string, label: string, delayMs: number, title?: string) {
+  cancelAlarm(id)
+  const timer = setTimeout(() => {
+    alarmTimers.delete(id)
+    new Notification({ title: title || `⏰ ${settings.petName || '뭉이'} 알람!`, body: label }).show()
+    mainWindow?.webContents.send('alarm-fired', { id, label })
+  }, Math.max(0, delayMs))
+  alarmTimers.set(id, timer)
+}
+
 // ── 휴식 알림 ──────────────────────────────────────────────
 function startBreakTimer(intervalMin: number) {
   if (breakTimer) clearTimeout(breakTimer)
@@ -193,14 +224,21 @@ function startBreakTimer(intervalMin: number) {
 }
 
 // ── 트레이 ──────────────────────────────────────────────────
+
+/** 패키징 여부에 따라 리소스 파일의 실제 경로를 돌려준다. */
+function resourcePath(...segments: string[]): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, ...segments)
+    : join(app.getAppPath(), 'build', ...segments)
+}
+
 function createTray() {
-  try {
-    const spritePath = join(app.getAppPath(), 'src/renderer/src/assets/pet-sprite.png')
-    const icon = nativeImage.createFromPath(spritePath).resize({ width: 16, height: 16 })
-    tray = new Tray(icon)
-  } catch {
-    tray = new Tray(nativeImage.createEmpty())
+  // nativeImage는 파일이 없어도 예외 없이 빈 이미지를 주므로 isEmpty로 확인해야 한다.
+  const icon = nativeImage.createFromPath(resourcePath('tray.png'))
+  if (icon.isEmpty()) {
+    console.warn('[트레이] 아이콘을 찾지 못했습니다:', resourcePath('tray.png'))
   }
+  tray = new Tray(icon)
 
   tray.setToolTip(settings.petName || '뭉이')
   updateTrayMenu()
@@ -443,6 +481,13 @@ app.whenReady().then(() => {
     new Notification({ title, body }).show()
   })
 
+  // 예약 알람 (메인 프로세스 타이머 사용)
+  ipcMain.handle('schedule-alarm', (_event, payload: { id: string; label: string; delayMs: number; title?: string }) => {
+    scheduleAlarm(payload.id, payload.label, payload.delayMs, payload.title)
+  })
+
+  ipcMain.handle('cancel-alarm', (_event, id: string) => cancelAlarm(id))
+
   ipcMain.on('set-ignore-mouse-events', (_event, ignore: boolean) => {
     mainWindow?.setIgnoreMouseEvents(ignore, { forward: true })
   })
@@ -455,7 +500,7 @@ app.whenReady().then(() => {
       const wxRes = await fetch(
         `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code`
       )
-      const wx = await wxRes.json()
+      const wx = await wxRes.json() as { current: { temperature_2m: number; weather_code: number } }
       const temp = Math.round(wx.current.temperature_2m)
       const code = wx.current.weather_code
       const { emoji, desc } = weatherFromCode(code, temp)
@@ -463,8 +508,8 @@ app.whenReady().then(() => {
     }
     try {
       const locRes = await fetch('https://ipapi.co/json/')
-      const loc = await locRes.json()
-      let lat = loc.latitude, lon = loc.longitude
+      const loc = await locRes.json() as { latitude?: number; longitude?: number }
+      const { latitude: lat, longitude: lon } = loc
       if (lat != null && lon != null) {
         return await tryFetch(lat, lon)
       }
@@ -509,7 +554,10 @@ app.on('window-all-closed', () => {
   }
 })
 
+// Cmd+Q / 독 종료로 들어오면 창의 close 핸들러가 트레이로 숨기지 않도록 표시해준다.
 app.on('before-quit', () => {
+  isAppQuitting = true
+  clearAllAlarms()
   if (pyProc) { pyProc.kill(); pyProc = null }
 })
 

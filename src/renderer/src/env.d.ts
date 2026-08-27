@@ -65,6 +65,10 @@ interface WindowElectron {
     setIgnoreMouseEvents: (ignore: boolean) => void
     geminiChat: (sessionId: string, message: string) => Promise<{ text?: string; error?: string; actions?: Action[] }>
     showNotification: (title: string, body: string) => Promise<void>
+    scheduleAlarm: (payload: { id: string; label: string; delayMs: number; title?: string }) => Promise<void>
+    cancelAlarm: (id: string) => Promise<void>
+    onAlarmFired: (cb: (payload: { id: string; label: string }) => void) => void
+    offAlarmFired: () => void
     getScreenSize: () => Promise<{ width: number; height: number }>
     getWeather: () => Promise<{ temp: number; code: number; emoji: string; desc: string } | null>
     getSpriteBase64: () => Promise<string | null>

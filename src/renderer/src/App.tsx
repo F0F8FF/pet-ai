@@ -37,7 +37,6 @@ export default function App() {
     setMessages(prev => [...prev, { role: 'pet', text: msg }])
     setAlarmMsg(msg)
     setEmotion('excited')
-    setTimeout(() => { setAlarmMsg(null); setEmotion('idle') }, 6000)
   }, [setEmotion])
 
   const { state: pomoState, controls: pomoControls } = usePomodoro(handlePomoFinish)
@@ -62,10 +61,26 @@ export default function App() {
       setMessages(prev => [...prev, { role: 'pet', text: msg }])
       setAlarmMsg(msg)
       setEmotion('love')
-      setTimeout(() => { setAlarmMsg(null); setEmotion('idle') }, 7000)
     })
     return () => window.electronAPI.offBreakReminder()
   }, [setEmotion])
+
+  // 메인 프로세스에서 예약 알람이 울리면 UI에 반영 (알림 자체는 메인이 이미 발송)
+  useEffect(() => {
+    window.electronAPI.onAlarmFired(({ label }) => {
+      setAlarmMsg(`⏰ ${label}`)
+      setMessages(prev => [...prev, { role: 'pet', text: `⏰ ${label}` }])
+      setEmotion('excited')
+    })
+    return () => window.electronAPI.offAlarmFired()
+  }, [setEmotion])
+
+  // 알람 오버레이는 표시 후 자동으로 닫는다
+  useEffect(() => {
+    if (!alarmMsg) return
+    const t = setTimeout(() => { setAlarmMsg(null); setEmotion('idle') }, 6000)
+    return () => clearTimeout(t)
+  }, [alarmMsg, setEmotion])
 
   // 설정 로드
   useEffect(() => {
@@ -218,13 +233,12 @@ export default function App() {
           const label = action.label || `${action.seconds}초 알람`
           const timeStr = action.seconds >= 60 ? `${Math.floor(action.seconds/60)}분` : `${action.seconds}초`
           setMessages(prev => [...prev, { role: 'pet', text: `⏰ ${timeStr} 뒤에 알려드릴게요!` }])
-          setTimeout(() => {
-            window.electronAPI.showNotification('⏰ 뭉이 알람!', label)
-            setAlarmMsg(`⏰ ${label} 시간이 됐어요!`)
-            setMessages(prev => [...prev, { role: 'pet', text: `⏰ ${label} 시간이에요 주인님!` }])
-            setEmotion('excited')
-            setTimeout(() => { setAlarmMsg(null); setEmotion('idle') }, 5000)
-          }, action.seconds * 1000)
+          // 렌더러 setTimeout은 창이 숨겨지면 스로틀링되므로 메인 프로세스에 예약한다.
+          window.electronAPI.scheduleAlarm({
+            id: `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            label,
+            delayMs: action.seconds * 1000,
+          })
         }
         if (action.type === 'add_todo' && action.text) {
           setTodos(prev => [...prev, { id: Date.now(), text: action.text!, done: false, urgent: action.urgent || false }])

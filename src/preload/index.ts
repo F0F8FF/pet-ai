@@ -26,6 +26,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showNotification: (title: string, body: string): Promise<void> =>
     ipcRenderer.invoke('show-notification', title, body),
 
+  // 예약 알람 (메인 프로세스 타이머 → 창이 숨겨져도 정시에 울린다)
+  scheduleAlarm: (payload: { id: string; label: string; delayMs: number; title?: string }): Promise<void> =>
+    ipcRenderer.invoke('schedule-alarm', payload),
+  cancelAlarm: (id: string): Promise<void> => ipcRenderer.invoke('cancel-alarm', id),
+  onAlarmFired: (cb: (payload: { id: string; label: string }) => void) =>
+    ipcRenderer.on('alarm-fired', (_e, payload) => cb(payload)),
+  offAlarmFired: () => ipcRenderer.removeAllListeners('alarm-fired'),
+
   getScreenSize: (): Promise<{ width: number; height: number }> =>
     ipcRenderer.invoke('get-screen-size'),
 

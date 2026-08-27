@@ -33,6 +33,11 @@ export default function App() {
   const { chat, isLoading, emotion, setEmotion } = useGemini()
   const weather = useWeather()
 
+  // handleSend는 messages를 의존성에 두지 않는다(메시지마다 콜백이 재생성되므로).
+  // 대신 ref로 최신 값을 읽어 분석 명령어가 옛 스냅샷을 쓰지 않게 한다.
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
+
   const handlePomoFinish = useCallback((msg: string) => {
     setMessages(prev => [...prev, { role: 'pet', text: msg }])
     setAlarmMsg(msg)
@@ -152,7 +157,7 @@ export default function App() {
 
     // Python NLP 분석 명령어
     if (/^(기분|감정)\s*(분석|리포트|보고서)?$/i.test(t)) {
-      const userMsgs = messages.filter(m => m.role === 'user').map(m => m.text)
+      const userMsgs = messagesRef.current.filter(m => m.role === 'user').map(m => m.text)
       if (userMsgs.length < 2) {
         const msg = '대화를 좀 더 나눠야 분석할 수 있어요! 🐾'
         setMessages(prev => [...prev, { role: 'pet', text: msg }])
@@ -173,7 +178,7 @@ export default function App() {
     }
 
     if (/^키워드\s*(분석|추출)?$/i.test(t)) {
-      const allText = messages.filter(m => m.role === 'user').map(m => m.text).join(' ')
+      const allText = messagesRef.current.filter(m => m.role === 'user').map(m => m.text).join(' ')
       if (allText.trim().length < 10) {
         const msg = '키워드를 뽑으려면 대화가 더 필요해요! 🐾'
         setMessages(prev => [...prev, { role: 'pet', text: msg }])

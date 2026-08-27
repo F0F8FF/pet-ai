@@ -54,9 +54,9 @@ npm install
 #### 방법 A: Google Gemini (클라우드)
 
 ```env
-VITE_LLM_PROVIDER=gemini
-VITE_GEMINI_API_KEY=여기에_발급받은_API_키
-VITE_GEMINI_MODEL=gemini-2.5-flash
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=여기에_발급받은_API_키
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 #### 방법 B: Ollama (로컬 LLM, 무료, 오프라인 가능)
@@ -69,12 +69,16 @@ ollama pull qwen3.5   # 모델 다운로드 (약 6.6GB)
 ```
 
 ```env
-VITE_LLM_PROVIDER=ollama
-VITE_OLLAMA_MODEL=qwen3.5
-VITE_OLLAMA_URL=http://localhost:11434
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=qwen3.5
+OLLAMA_URL=http://localhost:11434
 ```
 
 > ⚠️ `.env`는 Git에 올라가지 않습니다. `.env.example`을 참고해 직접 만드세요.
+>
+> 환경변수에 `VITE_` 접두사를 붙이지 마세요. electron-vite가 `VITE_`로 시작하는 값을
+> 렌더러 번들에 인라인하기 때문에, API 키가 배포 파일에 평문으로 포함될 수 있습니다.
+> 이 값들은 메인 프로세스에서만 `process.env`로 읽습니다.
 
 ### 4. Python NLP 엔진 설치 (선택)
 

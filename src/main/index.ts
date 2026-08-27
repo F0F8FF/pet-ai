@@ -141,6 +141,17 @@ function getSystemPrompt(petName: string): string {
 const chatHistories = new Map<string, Array<{ role: string; parts: Array<{ text: string }> }>>()
 const ollamaChatHistories = new Map<string, Array<{ role: string; content: string }>>()
 
+/**
+ * 히스토리로 보관할 최대 메시지 수(= 10턴). 제한이 없으면 메모리가 계속 늘고,
+ * 매 요청마다 전체 히스토리를 재전송하는 구조라 토큰 사용량이 대화 길이에 따라
+ * 급격히 늘어난다(요청 한도 초과의 주 원인).
+ */
+const MAX_HISTORY_MESSAGES = 20
+
+function trimHistory<T>(messages: T[]): T[] {
+  return messages.length > MAX_HISTORY_MESSAGES ? messages.slice(-MAX_HISTORY_MESSAGES) : messages
+}
+
 // ── 전역 변수 ──────────────────────────────────────────────
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -322,10 +333,10 @@ function parseModelResponse(raw: string): { text: string; actions: unknown[] } {
 }
 
 async function chatWithGemini(sessionId: string, userMessage: string, petName: string) {
-  const apiKey = process.env['VITE_GEMINI_API_KEY']
-  const modelId = process.env['VITE_GEMINI_MODEL']
+  const apiKey = process.env['GEMINI_API_KEY']
+  const modelId = process.env['GEMINI_MODEL']
   if (!apiKey || !modelId) {
-    return { error: '.env에서 VITE_GEMINI_API_KEY / VITE_GEMINI_MODEL을 확인해주세요 🥺' }
+    return { error: '.env에서 GEMINI_API_KEY / GEMINI_MODEL을 확인해주세요 🥺' }
   }
   const genAI = new GoogleGenerativeAI(apiKey)
   const model = genAI.getGenerativeModel({ model: modelId, systemInstruction: getSystemPrompt(petName) })
@@ -333,13 +344,17 @@ async function chatWithGemini(sessionId: string, userMessage: string, petName: s
   const chatSession = model.startChat({ history })
   const result = await chatSession.sendMessage(userMessage)
   const raw = result.response.text().trim()
-  chatHistories.set(sessionId, [...history, { role: 'user', parts: [{ text: userMessage }] }, { role: 'model', parts: [{ text: raw }] }])
+  chatHistories.set(sessionId, trimHistory([
+    ...history,
+    { role: 'user', parts: [{ text: userMessage }] },
+    { role: 'model', parts: [{ text: raw }] },
+  ]))
   return parseModelResponse(raw)
 }
 
 async function chatWithOllama(sessionId: string, userMessage: string, petName: string) {
-  const ollamaModel = process.env['VITE_OLLAMA_MODEL'] || 'qwen3.5'
-  const ollamaUrl = process.env['VITE_OLLAMA_URL'] || 'http://localhost:11434'
+  const ollamaModel = process.env['OLLAMA_MODEL'] || 'qwen3.5'
+  const ollamaUrl = process.env['OLLAMA_URL'] || 'http://localhost:11434'
   const history = ollamaChatHistories.get(sessionId) || []
   const messages = [
     { role: 'system', content: getSystemPrompt(petName) },
@@ -355,16 +370,29 @@ async function chatWithOllama(sessionId: string, userMessage: string, petName: s
   const data = await res.json() as { message?: { content?: string } }
   const raw = (data.message?.content ?? '').trim()
   if (!raw) return { error: 'Ollama 응답이 비어있어요.' }
-  ollamaChatHistories.set(sessionId, [...history, { role: 'user', content: userMessage }, { role: 'assistant', content: raw }])
+  ollamaChatHistories.set(sessionId, trimHistory([
+    ...history,
+    { role: 'user', content: userMessage },
+    { role: 'assistant', content: raw },
+  ]))
   return parseModelResponse(raw)
 }
 
 // ── Python NLP 엔진 ─────────────────────────────────────────
 
 let pyProc: ChildProcess | null = null
-let pyReady = false
 const pyCallbacks = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 let pyReqId = 0
+/** 인터프리터를 찾을 수 없다고 확인되면 재시도하지 않고 즉시 안내한다. */
+let pyUnavailableReason: string | null = null
+
+const PY_MISSING_MSG = 'Python 엔진을 쓸 수 없어요. python3 설치 후 pip3 install -r python/requirements.txt 를 실행해주세요 🥺'
+
+/** 대기 중인 모든 요청을 같은 이유로 실패시킨다. */
+function rejectAllPyCallbacks(message: string) {
+  for (const cb of Array.from(pyCallbacks.values())) cb.reject(new Error(message))
+  pyCallbacks.clear()
+}
 
 function getPythonPath(): string {
   const pythonDir = app.isPackaged
@@ -377,7 +405,8 @@ function spawnPython(): void {
   if (pyProc) return
   const scriptPath = getPythonPath()
   if (!existsSync(scriptPath)) {
-    console.warn('[Python] main.py not found:', scriptPath)
+    pyUnavailableReason = `python/main.py 를 찾을 수 없어요 (${scriptPath})`
+    console.warn('[Python]', pyUnavailableReason)
     return
   }
 
@@ -385,6 +414,14 @@ function spawnPython(): void {
   pyProc = spawn(pythonCmd, [scriptPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+  })
+
+  // 'error' 리스너가 없으면 인터프리터를 못 찾았을 때 Node가 예외를 던져 앱이 죽는다.
+  pyProc.on('error', (err) => {
+    console.warn('[Python] 실행 실패:', err.message)
+    pyProc = null
+    pyUnavailableReason = PY_MISSING_MSG
+    rejectAllPyCallbacks(PY_MISSING_MSG)
   })
 
   pyProc.stdout?.on('data', (chunk: Buffer) => {
@@ -408,36 +445,36 @@ function spawnPython(): void {
   })
 
   pyProc.on('exit', (code) => {
-    console.log('[Python] exited with code', code)
+    console.log('[Python] 종료 (code:', code, ')')
     pyProc = null
-    pyReady = false
-    for (const [, cb] of pyCallbacks) cb.reject(new Error('Python process exited'))
-    pyCallbacks.clear()
+    rejectAllPyCallbacks('Python 엔진이 예상치 못하게 종료됐어요.')
   })
-
-  pyReady = true
 }
 
 function callPython(task: string, input: unknown): Promise<unknown> {
   return new Promise((resolve, reject) => {
+    if (pyUnavailableReason) return reject(new Error(pyUnavailableReason))
+
     if (!pyProc?.stdin?.writable) {
       spawnPython()
       if (!pyProc?.stdin?.writable) {
-        return reject(new Error('Python 엔진을 시작할 수 없어요. python3이 설치되어 있는지 확인해주세요.'))
+        return reject(new Error(pyUnavailableReason || PY_MISSING_MSG))
       }
     }
+
     const id = ++pyReqId
-    pyCallbacks.set(id, { resolve, reject })
-
-    const payload = JSON.stringify({ task, input, _id: id }) + '\n'
-    pyProc!.stdin!.write(payload)
-
-    setTimeout(() => {
-      if (pyCallbacks.has(id)) {
-        pyCallbacks.delete(id)
-        reject(new Error('Python 응답 시간 초과 (10초)'))
-      }
+    // 응답이 오면 타임아웃 타이머도 함께 정리해야 죽은 타이머가 쌓이지 않는다.
+    const timeout = setTimeout(() => {
+      pyCallbacks.delete(id)
+      reject(new Error('Python 응답 시간 초과 (10초)'))
     }, 10000)
+
+    pyCallbacks.set(id, {
+      resolve: (v) => { clearTimeout(timeout); resolve(v) },
+      reject: (e) => { clearTimeout(timeout); reject(e) },
+    })
+
+    pyProc!.stdin!.write(JSON.stringify({ task, input, _id: id }) + '\n')
   })
 }
 
@@ -446,7 +483,7 @@ app.whenReady().then(() => {
   // LLM 채팅 (Gemini / Ollama 분기)
   ipcMain.handle('gemini-chat', async (_event, sessionId: string, userMessage: string) => {
     settings = loadSettings()
-    const provider = (process.env['VITE_LLM_PROVIDER'] || 'gemini').toLowerCase()
+    const provider = (process.env['LLM_PROVIDER'] || 'gemini').toLowerCase()
     const petName = settings.petName || '뭉이'
     try {
       if (provider === 'ollama') {

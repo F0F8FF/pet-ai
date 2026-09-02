@@ -34,9 +34,35 @@ body {
   will-change: left, top;
   transition: transform 0.25s ease;
 }
-.pet-wrapper:hover {
-  transform: scale(1.05);
+/* 픽셀 아트는 정수배가 아닌 확대에서 블록이 뭉개진다.
+   그래서 호버 표시를 scale 대신 글로우로 준다. */
+.pet-wrapper:hover .pet-sprite-frame {
+  filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.9))
+          drop-shadow(0 3px 6px rgba(0, 0, 0, 0.25));
 }
+
+/* 절차적 몸짓(도약·기울기·스쿼시)이 얹히는 레이어.
+   발이 바닥에 붙은 것처럼 눌리려면 변환 원점이 아래 가운데여야 한다. */
+.pet-motion {
+  transform-origin: 50% 100%;
+  will-change: transform;
+}
+
+/* 걷기 시트에서 프레임 한 장을 보여주는 창.
+   background-position 만 옮기면 되므로 텍스처 하나로 애니메이션이 된다. */
+.pet-sprite-frame {
+  display: block;
+  cursor: grab;
+  image-rendering: pixelated;
+  background-repeat: no-repeat;
+  transform-origin: center center;
+  will-change: background-position, transform;
+  -webkit-user-select: none;
+  user-select: none;
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.22));
+  transition: filter 0.2s ease;
+}
+.pet-sprite-frame:active { cursor: grabbing; }
 
 .pet-body {
   width: 100px;
@@ -79,20 +105,13 @@ body {
 .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
 .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
 
-/* 감정별 애니메이션 */
-.pet-body.anim-idle,
-.pet-sprite.anim-idle     { animation: pet-float 3s ease-in-out infinite; }
-.pet-body.anim-happy,
-.pet-sprite.anim-happy    { animation: pet-bounce 0.45s ease-in-out infinite; }
-.pet-body.anim-thinking,
+/* 감정별 애니메이션.
+   idle 과 happy 는 여기 없다. 평소 숨쉬기와 걷기는 usePetMotion 이
+   매 프레임 계산하므로 CSS 키프레임과 겹치면 서로 덮어쓴다. */
 .pet-sprite.anim-thinking { animation: pet-tilt 1.5s ease-in-out infinite; }
-.pet-body.anim-sleepy,
 .pet-sprite.anim-sleepy   { animation: pet-sway 3s ease-in-out infinite; opacity: 0.85; }
-.pet-body.anim-excited,
 .pet-sprite.anim-excited  { animation: pet-jump 0.3s ease-in-out infinite; }
-.pet-body.anim-love,
 .pet-sprite.anim-love     { animation: pet-pulse 0.7s ease-in-out infinite; }
-.pet-body.anim-hot,
 .pet-sprite.anim-hot      { animation: pet-shake 0.12s ease-in-out infinite; }
 
 /* 감정 이모지 오버레이 */
@@ -110,25 +129,6 @@ body {
   50%      { transform: translateY(-3px); opacity: 0.9; }
 }
 
-/* ── 감정별 애니메이션 ── */
-.pet-sprite-wrap.idle     { animation: pet-float 3s ease-in-out infinite; }
-.pet-sprite-wrap.happy    { animation: pet-bounce 0.45s ease-in-out infinite; }
-.pet-sprite-wrap.thinking { animation: pet-tilt 1.5s ease-in-out infinite; }
-.pet-sprite-wrap.sleepy   { animation: pet-sway 3s ease-in-out infinite; opacity: 0.85; }
-.pet-sprite-wrap.excited  { animation: pet-jump 0.3s ease-in-out infinite; }
-.pet-sprite-wrap.love     { animation: pet-pulse 0.7s ease-in-out infinite; filter: drop-shadow(0 6px 20px rgba(255,100,150,0.5)); }
-.pet-sprite-wrap.hot      { animation: pet-shake 0.12s ease-in-out infinite; filter: drop-shadow(0 6px 20px rgba(255,80,0,0.5)); }
-
-@keyframes pet-float {
-  0%, 100% { transform: translateY(0) scale(1); }
-  50%      { transform: translateY(-6px) scale(1.02); }
-}
-
-@keyframes pet-bounce {
-  0%, 100% { transform: translateY(0) scale(1); }
-  40%      { transform: translateY(-12px) scale(1.06); }
-  60%      { transform: translateY(-14px) scale(0.98); }
-}
 
 @keyframes pet-tilt {
   0%, 100% { transform: rotate(0deg); }
@@ -155,12 +155,6 @@ body {
   0%, 100% { transform: translateX(0); }
   25%      { transform: translateX(-4px) rotate(-2deg); }
   75%      { transform: translateX(4px) rotate(2deg); }
-}
-
-@keyframes pet-walk {
-  0%   { transform: translateY(0) rotate(-3deg); }
-  50%  { transform: translateY(-4px) rotate(3deg); }
-  100% { transform: translateY(0) rotate(-3deg); }
 }
 
 .pin-btn {

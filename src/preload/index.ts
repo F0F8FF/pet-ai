@@ -40,9 +40,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWeather: (): Promise<{ temp: number; code: number; emoji: string; desc: string } | null> =>
     ipcRenderer.invoke('fetch-weather'),
 
-  getSpriteBase64: (): Promise<string | null> =>
-    ipcRenderer.invoke('get-sprite-base64'),
-
   // 시스템 통계 (CPU + RAM)
   onSystemStats: (cb: (stats: { cpu: number; ram: { used: number; totalGB: number; freeGB: number } }) => void) =>
     ipcRenderer.on('system-stats', (_e, stats) => cb(stats)),

@@ -561,11 +561,6 @@ app.whenReady().then(() => {
 
   ipcMain.on('cpu-update', () => {}) // 하위 호환
 
-  ipcMain.handle('get-sprite-base64', () => {
-    const spritePath = join(app.getAppPath(), 'src/renderer/src/assets/pet-sprite.png')
-    try { return `data:image/png;base64,${readFileSync(spritePath).toString('base64')}` } catch { return null }
-  })
-
   // 설정
   ipcMain.handle('get-settings', () => settings)
   ipcMain.handle('save-settings', (_event, newSettings: AppSettings) => {

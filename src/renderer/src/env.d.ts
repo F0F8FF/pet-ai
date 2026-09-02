@@ -71,7 +71,6 @@ interface WindowElectron {
     offAlarmFired: () => void
     getScreenSize: () => Promise<{ width: number; height: number }>
     getWeather: () => Promise<{ temp: number; code: number; emoji: string; desc: string } | null>
-    getSpriteBase64: () => Promise<string | null>
     onSystemStats: (cb: (stats: SystemStats) => void) => void
     offSystemStats: () => void
     onCpuUpdate: (cb: (usage: number) => void) => void

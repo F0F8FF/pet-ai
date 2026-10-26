@@ -10,9 +10,11 @@ interface ChatBubbleProps {
   onSend: (text: string) => void
   isLoading: boolean
   petName?: string
+  /** 입력창 위에 띄울 빠른 질문 */
+  chips?: string[]
 }
 
-export function ChatBubble({ messages, onSend, isLoading, petName = '뭉이' }: ChatBubbleProps) {
+export function ChatBubble({ messages, onSend, isLoading, petName = '뭉이', chips = [] }: ChatBubbleProps) {
   const [input, setInput] = useState('')
   const [isComposing, setIsComposing] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -54,6 +56,14 @@ export function ChatBubble({ messages, onSend, isLoading, petName = '뭉이' }: 
           </div>
         )}
       </div>
+
+      {chips.length > 0 && (
+        <div className="talk-chips chat-chips">
+          {chips.map((c) => (
+            <button key={c} className="talk-chip" disabled={isLoading} onClick={() => onSend(c)}>{c}</button>
+          ))}
+        </div>
+      )}
 
       <div className="chat-input-area">
         <input

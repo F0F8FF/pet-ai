@@ -31,17 +31,22 @@ extraResources:
 
 mac:
   category: public.app-category.utilities
+  # arm64 = Apple 칩(M1~), x64 = Intel 맥. 받는 사람이 자기 맥에 맞는 파일을 고른다.
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
   icon: build/icon.png
   extendInfo:
     NSMicrophoneUsageDescription: 채팅 음성 입력에 사용해요 (선택)
-  hardenedRuntime: true
+  # 개발자 인증서가 없으므로 builder 서명은 끄고 afterPack에서 애드혹 서명만 한다.
+  # 서명이 깨진 채로 두면 Apple 칩 맥이 "손상된 앱"으로 막아버리고, 애드혹이면 "그래도 열기"로 열 수 있다.
+  # 공증(notarize)을 안 하므로 hardened runtime은 의미가 없고, 켜면 애드혹 서명과 충돌한다.
+  identity: null
+  hardenedRuntime: false
   gatekeeperAssess: false
-
-dmg:
-  artifactName: ${productName}-${version}.${ext}
 
 win:
   target:
@@ -58,3 +63,4 @@ portable:
   artifactName: ${productName}-${version}-portable.${ext}
 
 npmRebuild: false
+afterPack: scripts/adhoc-sign.cjs

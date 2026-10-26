@@ -1,12 +1,65 @@
 import { useEffect, useRef, useState } from 'react'
 import { PomodoroState, PomodoroControls } from '../hooks/usePomodoro'
+import { FocusLog, dayKey } from '../hooks/useFocusLog'
 
 interface PomodoroProps {
   state: PomodoroState
   controls: PomodoroControls
+  focusLog: FocusLog
 }
 
-export function Pomodoro({ state, controls }: PomodoroProps) {
+const GRASS_WEEKS = 15
+
+/** GitHub 잔디처럼 주(열) × 요일(행). 맨 오른쪽 열이 이번 주다. */
+function FocusGrass({ log }: { log: FocusLog }) {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const first = new Date(today)
+  first.setDate(today.getDate() - today.getDay() - (GRASS_WEEKS - 1) * 7)
+
+  const minutes = (d: Date) => Math.round((log[dayKey(d)] ?? 0) / 60)
+  const level = (m: number) => (m === 0 ? 0 : m < 25 ? 1 : m < 50 ? 2 : m < 100 ? 3 : 4)
+
+  const weekStart = new Date(today)
+  weekStart.setDate(today.getDate() - today.getDay())
+  let week = 0
+  for (const d = new Date(weekStart); d <= today; d.setDate(d.getDate() + 1)) week += minutes(d)
+
+  const cols = Array.from({ length: GRASS_WEEKS }, (_, w) =>
+    Array.from({ length: 7 }, (_, r) => {
+      const d = new Date(first)
+      d.setDate(first.getDate() + w * 7 + r)
+      return d
+    }),
+  )
+
+  return (
+    <div className="focus-grass">
+      <div className="focus-grass-head">
+        <span>오늘 집중 <b>{minutes(today)}분</b></span>
+        <span>이번 주 <b>{week}분</b></span>
+      </div>
+      <div className="focus-grass-grid">
+        {cols.map((days, w) => (
+          <div key={w} className="focus-grass-col">
+            {days.map((d) => {
+              const m = minutes(d)
+              return (
+                <div
+                  key={d.getTime()}
+                  className={`focus-cell lv${d > today ? 'x' : level(m)}`}
+                  title={`${d.getMonth() + 1}/${d.getDate()} · ${m}분`}
+                />
+              )
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function Pomodoro({ state, controls, focusLog }: PomodoroProps) {
   const { phase, seconds, running, round, config } = state
   const { toggle, reset, switchPhase, setConfig } = controls
   const [ringSize, setRingSize] = useState(120)
@@ -126,6 +179,8 @@ export function Pomodoro({ state, controls }: PomodoroProps) {
         </button>
         <button className="pomo-btn" onClick={reset}>↺ 리셋</button>
       </div>
+
+      <FocusGrass log={focusLog} />
     </div>
   )
 }

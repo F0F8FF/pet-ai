@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Character, ClipName, GazeDir, resolveClip } from '../pet/character'
+
+// 커서가 멈추고 이만큼 지나면 다시 정면을 본다
+const GAZE_HOLD_MS = 2500
 
 /**
  * 펫의 이동, 자세, 걸음 프레임, 몸짓, 눈 깜빡임을 계산하는 훅.
@@ -9,8 +13,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
  *     시간으로 돌리면 실제 속도와 무관하게 다리가 움직여서 디딘 발이 미끄러진다.
  *     거리로 묶으면 이징 때문에 느려지는 출발·도착에서 다리도 같이 느려진다.
  *
- *  2. 반대로 꼬리 흔들기는 시간으로 돌린다. 앉아 있을 때는 이동 거리가 0 이라
- *     거리로 묶으면 꼬리가 멈춰버린다.
+ *  2. 걷기 외의 동작(앉기·손 흔들기·생각하기…)은 시간으로 돌린다. 제자리 동작은
+ *     이동 거리가 0 이라 거리로 묶으면 멈춰버린다.
  *
  *  3. 위치와 프레임을 React state 로 두지 않고 DOM 에 직접 쓴다.
  *     매 프레임 setState 하면 60fps 로 리렌더가 돌아서 항상 켜져 있는 앱에 부담이 크다.
@@ -20,11 +24,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
  *     몸통까지 크게 흔들면 과장돼 보인다.
  */
 
-// 이 거리(px)를 갈 때마다 걷기 프레임이 한 장 넘어간다.
+// 화면에서 이 거리(px)를 갈 때마다 걷기 프레임이 한 장 넘어간다. 112px 높이 기준이며 크기에 비례한다.
 const FRAME_STRIDE_PX = 11
-
-// 꼬리 한 번 움직이는 시간(ms)
-const WAG_MS = 130
+const STRIDE_REF_H = 112
 
 // 도약 높이(px). 프레임이 다리를 그려주므로 보조 역할만 한다.
 const BOB_PX = 3
@@ -79,38 +81,16 @@ interface Point {
   y: number
 }
 
-/** 걷지 않을 때 취하는 자세. */
-export type RestPose = 'stand' | 'sit'
-
-export interface SpriteSheet {
-  /** 가로 한 줄에 모든 자세의 프레임이 나열된 시트. */
-  sheet: string
-  /** 눈 감은 같은 배치의 시트. 없으면 깜빡이지 않는다. */
-  blinkSheet?: string
-  frameWidth: number
-  frameHeight: number
-  frameCount: number
-  /** 정수배만 쓴다. 소수배로 확대하면 픽셀 블록이 뭉개진다. */
-  scale: number
-  poses: {
-    /** 이동 거리로 순환한다. */
-    walk: number[]
-    /** 다리를 곧게 펴고 서 있는 한 장. */
-    stand: number
-    /** 시간으로 순환한다. 되돌아오도록 나열하면 꼬리가 자연스럽게 왕복한다. */
-    sit: number[]
-  }
-  /**
-   * 앉은 자세가 정면을 바라보는 그림인지. 정면 그림은 좌우를 뒤집으면
-   * 의미가 없고 목걸이나 귀의 좌우가 어긋나므로 반전을 건너뛴다.
-   */
-  sitFacesViewer?: boolean
-}
-
+/**
+ * @param character 시트와 동작 정의
+ * @param scale     화면 확대 배율 (displayScale 결과)
+ * @param initialRest 처음 취할 제자리 동작
+ */
 export function usePetMotion(
   initial: Point,
-  sprite: SpriteSheet,
-  initialRest: RestPose = 'stand',
+  character: Character,
+  scale: number,
+  initialRest: ClipName = 'idle',
 ) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const motionRef = useRef<HTMLDivElement>(null)
@@ -131,20 +111,28 @@ export function usePetMotion(
   const phase = useRef(0)
   const facing = useRef<1 | -1>(1)
   const dragging = useRef(false)
-  const restPose = useRef<RestPose>(initialRest)
+  const restPose = useRef<ClipName>(initialRest)
+  const restSince = useRef(0)
   const falling = useRef(false)
   const ease = useRef(easeInOutCubic)
+
+  /** 한 번(또는 몇 번) 재생하고 제자리 동작으로 돌아가는 동작 */
+  const action = useRef<{ name: ClipName; startedAt: number; loops: number } | null>(null)
+  /** action 이 끝나면 이어서 할 동작들 */
+  const queue = useRef<Array<[ClipName, number]>>([])
+
+  const gaze = useRef<{ dir: GazeDir; until: number; since: number } | null>(null)
 
   const blinkUntil = useRef(0)
   const nextBlink = useRef(0)
   const shownSheet = useRef('')
-  const shownFrame = useRef(-1)
+  const shownFrame = useRef('')
 
-  // 상수처럼 쓰지만 props 로 들어오므로 최신 값을 ref 로 들고 있는다.
-  const cfg = useRef(sprite)
-  cfg.current = sprite
+  // props 로 들어오지만 매 프레임 읽으므로 최신 값을 ref 로 들고 있는다.
+  const cfg = useRef({ character, scale })
+  cfg.current = { character, scale }
 
-  /** 목표 지점까지 이징을 걸어 걸어간다. 걷기 시작하면 앉은 자세는 풀린다. */
+  /** 목표 지점까지 이징을 걸어 걸어간다. 걷기 시작하면 제자리 동작은 풀린다. */
   const moveTo = useCallback((x: number, y: number) => {
     const dist = Math.hypot(x - pos.current.x, y - pos.current.y)
     if (dist < 1) return
@@ -156,7 +144,8 @@ export function usePetMotion(
     moving.current = true
     falling.current = false
     ease.current = easeInOutCubic
-    restPose.current = 'stand'
+    restPose.current = 'idle'
+    action.current = null
     facing.current = x >= pos.current.x ? 1 : -1
     setIsWalking(true)
   }, [])
@@ -178,7 +167,8 @@ export function usePetMotion(
     moving.current = true
     falling.current = true
     ease.current = easeInQuad
-    restPose.current = 'stand' // 떨어진 뒤에는 네 발로 착지한다
+    restPose.current = 'idle'
+    action.current = null
     setIsWalking(false)
   }, [])
 
@@ -191,13 +181,46 @@ export function usePetMotion(
     setIsWalking(false)
   }, [])
 
-  /** 걷기를 멈추고 자세를 바꾼다. 앉을 때는 몸을 살짝 눌러 앉는 느낌을 준다. */
-  const rest = useCallback((pose: RestPose) => {
-    if (restPose.current === pose) return
+  /** 걷기를 멈추고 반복할 제자리 동작을 바꾼다. 바꾸는 순간 몸을 살짝 눌러 반동을 준다. */
+  const rest = useCallback((pose: ClipName) => {
+    if (restPose.current === pose && !moving.current) return
     restPose.current = pose
+    restSince.current = performance.now()
     moving.current = false
     settledAt.current = performance.now()
     setIsWalking(false)
+  }, [])
+
+  /** 동작을 loops 번 재생한 뒤 제자리 동작으로 돌아간다. 걷던 중이면 그 자리에 멈춘다. */
+  const play = useCallback((name: ClipName, loops = 1) => {
+    if (dragging.current) return
+    moving.current = false
+    falling.current = false
+    queue.current = []
+    action.current = { name, startedAt: performance.now(), loops }
+    settledAt.current = performance.now()
+    setIsWalking(false)
+  }, [])
+
+  /** 동작 여러 개를 차례로 이어서 한다. 춤처럼 짧은 동작을 엮을 때 쓴다. */
+  const playSeq = useCallback((steps: Array<[ClipName, number]>) => {
+    if (!steps.length) return
+    play(steps[0][0], steps[0][1])
+    queue.current = steps.slice(1)
+  }, [play])
+
+  /** 제자리에서 바라보는 방향만 바꾼다. 옆모습 동작에만 보인다. */
+  const face = useCallback((dir: 1 | -1) => {
+    if (!moving.current) facing.current = dir
+  }, [])
+
+  /** 그 방향을 쳐다본다. null 이면 정면. 쉬거나 앉아 있을 때만 보인다. */
+  const lookAt = useCallback((dir: GazeDir | null) => {
+    if (!dir) { gaze.current = null; return }
+    const now = performance.now()
+    // 같은 방향이면 재생 위치를 유지해야 칸이 처음으로 튀지 않는다.
+    const since = gaze.current?.dir === dir ? gaze.current.since : now
+    gaze.current = { dir, until: now + GAZE_HOLD_MS, since }
   }, [])
 
   const setDragging = useCallback((value: boolean) => {
@@ -248,7 +271,9 @@ export function usePetMotion(
       prev.current = { ...pos.current }
 
       // 프레임을 거리로 넘기는 것이 발 미끄러짐을 막는 핵심이다.
-      phase.current += travelled / FRAME_STRIDE_PX
+      // 캐릭터가 크면 보폭도 커지므로 화면 높이에 비례해 늘린다.
+      const { character: ch, scale: sc } = cfg.current
+      phase.current += travelled / (FRAME_STRIDE_PX * ((ch.frameH * sc) / STRIDE_REF_H))
 
       const wrapper = wrapperRef.current
       if (wrapper) {
@@ -300,38 +325,75 @@ export function usePetMotion(
         motion.style.transform = `translateY(${ty.toFixed(2)}px) rotate(${rot.toFixed(2)}deg) scale(${sx.toFixed(4)}, ${sy.toFixed(4)})`
       }
 
+      // 한 번짜리 동작이 끝났으면 제자리 동작으로 돌아간다.
+      const act = action.current
+      if (act) {
+        const { clip } = resolveClip(ch, act.name)
+        if (now - act.startedAt >= clip.frames.length * clip.frameMs * act.loops) {
+          const next = queue.current.shift()
+          action.current = next ? { name: next[0], startedAt: now, loops: next[1] } : null
+          settledAt.current = now
+        }
+      }
+
+      // 깜빡임: 대기 줄에 깜빡임이 들어 있는 캐릭터는 그 줄을 한 번 재생하고,
+      // 아니면 눈 감은 시트로 잠깐 바꿔 끼운다.
       if (now >= nextBlink.current) {
-        blinkUntil.current = now + BLINK_MS
         nextBlink.current =
           now + BLINK_MS + BLINK_GAP_MIN_MS + Math.random() * (BLINK_GAP_MAX_MS - BLINK_GAP_MIN_MS)
+        const idling = !stepping && !airborne && !action.current && restPose.current === 'idle'
+        if (ch.clips.blink) {
+          if (idling) action.current = { name: 'blink', startedAt: now, loops: 1 }
+        } else {
+          blinkUntil.current = now + BLINK_MS
+        }
       }
 
       const el = spriteRef.current
       if (el) {
-        const { sheet, blinkSheet, frameWidth, scale, poses, sitFacesViewer } = cfg.current
-        const sitting = !stepping && !airborne && restPose.current === 'sit'
-
-        let index: number
+        let row: number
+        let col: number
+        let flip = false
         if (stepping) {
-          index = poses.walk[Math.floor(phase.current) % poses.walk.length]
-        } else if (sitting) {
-          index = poses.sit[Math.floor(now / WAG_MS) % poses.sit.length]
+          const left = facing.current < 0
+          const clip = left && ch.clips.walkLeft ? ch.clips.walkLeft : ch.clips.walkRight
+          row = clip.row
+          col = clip.frames[Math.floor(phase.current) % clip.frames.length]
+          flip = left && !!clip.side
         } else {
-          index = poses.stand
+          const cur = action.current
+          const gz = gaze.current && now < gaze.current.until ? gaze.current : null
+          const g = gz ? ch.gaze?.[gz.dir] : undefined
+          const calm = !cur && (restPose.current === 'idle' || restPose.current === 'sit')
+          if (gz && g && calm && !dragging.current) {
+            // 0,1,2,3,2,1,0… 으로 왕복한다
+            const n = g.cells.length
+            const step = Math.floor((now - gz.since) / g.frameMs)
+            const period = Math.max(1, 2 * n - 2)
+            const k = step % period
+            ;[row, col] = g.cells[k < n ? k : period - k]
+          } else {
+            const { clip } = resolveClip(ch, cur ? cur.name : restPose.current)
+            const since = now - (cur ? cur.startedAt : restSince.current)
+            row = clip.row
+            col = clip.frames[Math.floor(since / clip.frameMs) % clip.frames.length]
+            flip = facing.current < 0 && !!clip.side
+          }
         }
 
-        if (index !== shownFrame.current) {
-          el.style.backgroundPositionX = `${-index * frameWidth * scale}px`
-          shownFrame.current = index
+        const key = `${row}:${col}:${sc}:${ch.frameW}`
+        if (key !== shownFrame.current) {
+          el.style.backgroundPosition = `${-col * ch.frameW * sc}px ${-row * ch.frameH * sc}px`
+          shownFrame.current = key
         }
 
-        const wanted = blinkSheet && now < blinkUntil.current ? blinkSheet : sheet
+        const wanted = ch.blinkSheet && now < blinkUntil.current ? ch.blinkSheet : ch.sheet
         if (wanted !== shownSheet.current) {
           el.style.backgroundImage = `url(${wanted})`
           shownSheet.current = wanted
         }
 
-        el.style.transform = `scaleX(${sitting && sitFacesViewer ? 1 : facing.current})`
+        el.style.transform = `scaleX(${flip ? -1 : 1})`
       }
     }
 
@@ -341,6 +403,6 @@ export function usePetMotion(
 
   return {
     wrapperRef, motionRef, spriteRef,
-    isWalking, moveTo, drop, placeAt, rest, setDragging, position,
+    isWalking, moveTo, drop, placeAt, rest, play, playSeq, face, lookAt, setDragging, position,
   }
 }

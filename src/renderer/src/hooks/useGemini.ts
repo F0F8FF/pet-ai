@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react'
 
-export type PetEmotion = 'idle' | 'happy' | 'thinking' | 'sleepy' | 'excited' | 'love' | 'hot'
+export type PetEmotion = 'idle' | 'happy' | 'thinking' | 'sleepy' | 'excited' | 'love' | 'hot' | 'sad'
 
 const SESSION_ID = `session_${Date.now()}`
 
@@ -23,22 +23,14 @@ export function useGemini() {
 
     try {
       const result = await window.electronAPI.geminiChat(SESSION_ID, userMessage)
-
-      if (result.error) {
-        setEmotion('idle')
-        return { text: result.error, actions: [] }
-      }
-
-      const text = result.text || ''
-      const actions = result.actions || []
-      setEmotion(detectEmotion(text))
-
+      const text = result.error ?? result.text ?? ''
+      setEmotion(result.error ? 'sad' : detectEmotion(text))
       if (emotionTimerRef.current) clearTimeout(emotionTimerRef.current)
       emotionTimerRef.current = setTimeout(() => setEmotion('idle'), 3000)
-
-      return { text, actions }
+      return { text, actions: result.error ? [] : result.actions || [] }
     } catch {
-      setEmotion('idle')
+      setEmotion('sad')
+      setTimeout(() => setEmotion('idle'), 3000)
       return { text: '앗, 오류가 났어요 주인님~ 다시 시도해줘요! 😢', actions: [] }
     } finally {
       setIsLoading(false)
